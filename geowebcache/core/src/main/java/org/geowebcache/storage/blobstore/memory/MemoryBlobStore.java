@@ -96,7 +96,7 @@ public class MemoryBlobStore implements BlobStore, ApplicationContextAware {
 
     public MemoryBlobStore() {
         // Initialization of the various elements
-        this.executorService = Executors.newFixedThreadPool(1);
+        this.executorService = Executors.newFixedThreadPool(Integer.parseInt(System.getProperty("memoryblobstore.executor.threads", "1")));
         lock = new ReentrantReadWriteLock(true);
         blobStoreStateLock = lock.writeLock();
         componentsStateLock = lock.readLock();
