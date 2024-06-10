@@ -17,6 +17,10 @@ package org.geowebcache.azure;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Objects.isNull;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.Iterators;
 import com.microsoft.azure.storage.blob.BlockBlobURL;
@@ -37,6 +41,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -74,6 +79,7 @@ public class AzureBlobStore implements BlobStore {
     public AzureBlobStore(
             AzureBlobStoreData configuration, TileLayerDispatcher layers, LockProvider lockProvider)
             throws StorageException {
+
         this.client = new AzureClient(configuration);
 
         String prefix = Optional.ofNullable(configuration.getPrefix()).orElse("");
@@ -97,6 +103,9 @@ public class AzureBlobStore implements BlobStore {
 
     @Override
     public boolean delete(String layerName) throws StorageException {
+
+        log.info("AzureBlobStore.delete called for layer " + layerName);
+
         checkNotNull(layerName, "layerName");
 
         final String metadataKey = keyBuilder.layerMetadata(layerName);
@@ -123,6 +132,13 @@ public class AzureBlobStore implements BlobStore {
     @Override
     public boolean deleteByParametersId(String layerName, String parametersId)
             throws StorageException {
+
+        log.info(
+                "AzureBlobStore.deleteByParametersId called for layer "
+                        + layerName
+                        + " and parametersId "
+                        + parametersId);
+
         checkNotNull(layerName, "layerName");
         checkNotNull(parametersId, "parametersId");
 
@@ -149,6 +165,12 @@ public class AzureBlobStore implements BlobStore {
     public boolean deleteByGridsetId(final String layerName, final String gridSetId)
             throws StorageException {
 
+        log.info(
+                "AzureBlobStore.deleteByGridsetId called for layer "
+                        + layerName
+                        + " and gridSetId "
+                        + gridSetId);
+
         checkNotNull(layerName, "layerName");
         checkNotNull(gridSetId, "gridSetId");
 
@@ -163,6 +185,7 @@ public class AzureBlobStore implements BlobStore {
 
     @Override
     public boolean delete(TileObject obj) throws StorageException {
+
         final String key = keyBuilder.forTile(obj);
         BlockBlobURL blob = client.getBlockBlobURL(key);
 
@@ -176,36 +199,52 @@ public class AzureBlobStore implements BlobStore {
             }
         }
 
-        try {
-            // if there are listeners, gather extra information
-            BlobGetPropertiesResponse properties = blob.getProperties().blockingGet();
-            Long oldSize = properties.headers().contentLength();
-            int statusCode = blob.delete().blockingGet().statusCode();
-            if (!HttpStatus.valueOf(statusCode).is2xxSuccessful()) {
-                return false;
-            }
-            if (oldSize != null) {
-                obj.setBlobSize(oldSize.intValue());
-            }
-        } catch (RestException e) {
-            if (e.response().statusCode() != 404) {
-                throw new StorageException("Failed to delete tile ", e);
-            }
-            return false;
-        }
+        // FIXME re-instate, to perform an actual delete
+//        try {
+//            // if there are listeners, gather extra information
+//            BlobGetPropertiesResponse properties = blob.getProperties().blockingGet();
+//            Long oldSize = properties.headers().contentLength();
+//            int statusCode = blob.delete().blockingGet().statusCode();
+//            if (!HttpStatus.valueOf(statusCode).is2xxSuccessful()) {
+//                return false;
+//            }
+//            if (oldSize != null) {
+//                obj.setBlobSize(oldSize.intValue());
+//            }
+//        } catch (RestException e) {
+//            if (e.response().statusCode() != 404) {
+//                throw new StorageException("Failed to delete tile ", e);
+//            }
+//            return false;
+//        }
+
         listeners.sendTileDeleted(obj);
         return true;
     }
 
     @Override
     public boolean delete(TileRange tileRange) throws StorageException {
+
+        log.info(
+                "AzureBlobStore.delete called for tile range "
+                        + tileRange.getLayerName()
+                        + " and range "
+                        + tileRange.toString());
+
         // see if there is anything to delete in that range by computing a prefix
         final String coordsPrefix = keyBuilder.coordinatesPrefix(tileRange, false);
+        log.info("AzureBlobStore.delete coordsPrefix: " + coordsPrefix);
         if (client.listBlobs(coordsPrefix, 1).isEmpty()) {
+            log.info("AzureBlobStore.delete: ignoring as nothing to delete");
             return false;
         }
 
         // open an iterator oer tile locations, to avoid memory accumulation
+        // TODO review. In our use cases, this approach ends up resulting in a lot more deletion attempts than it needs to
+        //  Other GeoWebCache installations may be different but ours is a 'lazy cache population' approach, for higher zoom levels
+        //  i.e. Seed to layer x (8 or so), then lazy populate the cache when tiles >= zoom level y (9) are requested
+        //  So in our scenario, it would be much more efficient to find and delete these tiles, as opposed to attempting a delete
+        //  on every _possible_ tile
         final Iterator<long[]> tileLocations =
                 new AbstractIterator<long[]>() {
 
@@ -221,6 +260,7 @@ public class AzureBlobStore implements BlobStore {
                 };
 
         // if no listeners, we don't need to gather extra tile info, use a dedicated fast path
+        log.info("AzureBlobStore.delete listeners.isEmpty(): " + listeners.isEmpty());
         if (listeners.isEmpty()) {
             // if there are no listeners, don't bother requesting every tile
             // metadata to notify the listeners
@@ -247,7 +287,6 @@ public class AzureBlobStore implements BlobStore {
             String gridSetId = tileRange.getGridSetId();
             String format = tileRange.getMimeType().getFormat();
             Map<String, String> parameters = tileRange.getParameters();
-
             Iterator<Callable<?>> tilesIterator =
                     Iterators.transform(
                             tileLocations,
@@ -259,13 +298,17 @@ public class AzureBlobStore implements BlobStore {
                                 return (Callable<Object>) () -> delete(tile);
                             });
             Iterator<List<Callable<?>>> partition =
-                    Iterators.partition(tilesIterator, DeleteManager.PAGE_SIZE);
+                    Iterators.partition(tilesIterator, DeleteManager.PAGE_SIZE); // 1000
 
             // once a page of callables is ready, run them in parallel on the delete manager
+            log.info("AzureBlobStore.delete, starting deletion iterator");
             while (partition.hasNext() && !shutDown) {
                 deleteManager.executeParallel(partition.next());
             }
+            log.info("AzureBlobStore.delete completed");
         }
+
+        log.info("AzureBlobStore.delete by tile range completed");
 
         return true;
     }

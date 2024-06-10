@@ -218,6 +218,12 @@ class AzureClient implements Closeable {
         if (segment != null) {
             items.addAll(segment.blobItems());
         }
+
+        // TODO A potential resolution for Truncate performance, is to support paging here, which in turn supports listing
+        //  all blobs (note that Azure will only ever return a max of 5,000, irrespective of the maxResults parameter)
+        //  There are Cons to this approach though - as we could be loading a large number into memory
+        //  As such, any solution would need to likely stream and act on the pages as opposed to the full result
+
         return items;
     }
 

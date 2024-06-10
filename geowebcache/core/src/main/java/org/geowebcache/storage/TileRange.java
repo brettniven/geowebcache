@@ -16,6 +16,10 @@ package org.geowebcache.storage;
 
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.geowebcache.filter.parameters.ParametersUtils;
 import org.geowebcache.mime.MimeType;
 
@@ -168,5 +172,43 @@ public class TileRange {
                     "Found no range bounds for z level " + zoomLevel + ": " + rangeBounds);
         }
         return zlevelBounds;
+    }
+
+    @Override
+    public String toString() {
+
+
+        String rangeBoundsAsString = rangeBounds == null ? "null" :
+                rangeBounds.keySet().stream()
+                        //.map(key -> key + "=" + rangeBounds.get(key))
+                        .map(key -> key + "=" + StringUtils.join(ArrayUtils.toObject(rangeBounds.get(key)), ","))
+                        .collect(Collectors.joining(", ", "{", "}"));
+
+        String parametersAsString = parameters == null ? "null" :
+                parameters.keySet().stream()
+                        .map(key -> key + "=" + parameters.get(key))
+                        .collect(Collectors.joining(", ", "{", "}"));
+
+        return "TileRange{"
+                + "layerName='"
+                + layerName
+                + '\''
+                + ", gridSetId='"
+                + gridSetId
+                + '\''
+                + ", zoomStart="
+                + zoomStart
+                + ", zoomStop="
+                + zoomStop
+                + ", rangeBounds="
+                + rangeBoundsAsString
+                + ", mimeType="
+                + mimeType
+                + ", parameters="
+                + parametersAsString
+                + ", parametersId='"
+                + parametersId
+                + '\''
+                + '}';
     }
 }
